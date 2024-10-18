@@ -2,26 +2,44 @@ package com.uk.accomodations.utils;
 
 import com.uk.accomodations.constants.ConstantPool;
 import com.uk.accomodations.enums.UserState;
+import com.uk.accomodations.services.AccommodationsApiService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.client.RestTemplate;
 import org.telegram.abilitybots.api.db.DBContext;
 import org.telegram.abilitybots.api.sender.SilentSender;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboard;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import static com.uk.accomodations.constants.ConstantPool.START_TEXT;
 import static com.uk.accomodations.enums.UserState.*;
+
 
 public class ResponseHandler {
 
     private final SilentSender sender;
     private final Map<Long, UserState> chatStates;
 
+    private final AccommodationsApiService accommodationsApiService;
+
+
+    @Autowired
     public ResponseHandler(SilentSender sender, DBContext db) {
         this.sender = sender;
-        chatStates = db.getMap(ConstantPool.CHAT_STATES);
+        this.chatStates = db.getMap(ConstantPool.CHAT_STATES);
+
+        RestTemplate restTemplate = new RestTemplate();
+        this.accommodationsApiService = new AccommodationsApiService(restTemplate);
+
     }
+
 
     public void replyToStart(long chatId) {
         SendMessage message = new SendMessage();
@@ -35,6 +53,7 @@ public class ResponseHandler {
         if (message.getText().equalsIgnoreCase("/stop")) {
             stopChat(chatId);
         }
+        System.out.print("Inside chat username is "+message.getFrom().getUserName());
 
         switch (chatStates.get(chatId)) {
             case AWAITING_NAME -> replyToName(chatId, message);
@@ -46,6 +65,25 @@ public class ResponseHandler {
             default -> unexpectedMessage(chatId);
         }
     }
+
+    public void onCallbackQueryReceived(CallbackQuery callbackQuery) {
+        String callbackData = callbackQuery.getData();
+        long chatId = callbackQuery.getMessage().getChatId();
+
+        // Check the callback data to determine which action to perform
+        if ("UPDATE_MESSAGE_TEXT".equals(callbackData)) {
+            // Update the chat state when the button is clicked
+            chatStates.put(chatId, STOP_CONVERSATION);
+
+            // Send confirmation message to the user
+            SendMessage message = new SendMessage();
+            message.setChatId(String.valueOf(chatId));
+            message.setText("Chat closed, If you want to start again click here /start to start. Thank you!!!");
+
+            sender.execute(message);
+        }
+    }
+
 
     private void unexpectedMessage(long chatId) {
         SendMessage sendMessage = new SendMessage();
@@ -111,21 +149,93 @@ public class ResponseHandler {
     }
 
     private void replyToAccommodationTypeSelection(long chatId) {
-        SendMessage sendMessage = new SendMessage();
-        sendMessage.setChatId(String.valueOf(chatId));
-        sendMessage.setText("Here are the list of accommodations. \n Thankyou for choosing me!! :)");
-        sendMessage.setReplyMarkup(KeyboardFactory.getRegionSelection());
-        sender.execute(sendMessage);
+        System.out.println("entering here");
+        // Prepare the accommodation data
+        List<String> accommodations = accommodationsApiService.fetchAccommodations(chatId);
+
+        System.out.println("response obtained");
+        if (accommodations == null || accommodations.isEmpty()) {
+            SendMessage sendMessage = new SendMessage();
+            sendMessage.setChatId(String.valueOf(chatId));
+            sendMessage.setText("Sorry, no accommodations are available at this time.");
+            sendMessage.setReplyMarkup(KeyboardFactory.hideKeyboard());
+            sender.execute(sendMessage);
+
+        } else {
+            System.out.println("entering else");
+            // Iterate through each accommodation and send a separate message
+            for (String accommodation : accommodations) {
+                // Create the SendMessage object for each accommodation
+                SendMessage sendMessage = new SendMessage();
+                sendMessage.setChatId(String.valueOf(chatId));
+
+                // Construct the message text
+                String messageText = "Here are the accommodation details:\n\n" + accommodation;
+
+                // Create inline keyboard markup for the current accommodation
+                InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+                List<List<InlineKeyboardButton>> keyboard = new ArrayList<>();
+
+                // Extract URL from accommodation data (this should return the correct URL)
+                String url = accommodationsApiService.extractUrlFromAccommodation(accommodation); // Make sure this method is implemented
+
+                // Create the inline button
+                InlineKeyboardButton button = new InlineKeyboardButton();
+                button.setText("Open link");
+                button.setUrl(url); // Set the URL for the button
+
+                // Add the button to a row
+                List<InlineKeyboardButton> row = new ArrayList<>();
+                row.add(button);
+                keyboard.add(row);
+
+                // Set the keyboard to the message
+                inlineKeyboardMarkup.setKeyboard(keyboard);
+                sendMessage.setReplyMarkup(inlineKeyboardMarkup);
+
+                // Set the message text
+                sendMessage.setText(messageText);
+                sendMessage.setParseMode("HTML"); // Set the parse mode to Markdown
+
+
+                sender.execute(sendMessage);
+
+            }
+        }
+
         chatStates.put(chatId, OBTAINING_RESULTS);
     }
+
+
+
+
 
     private void replyToObtainingResults(long chatId) {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(String.valueOf(chatId));
         sendMessage.setText("Thank you for choosing me!! :)");
-        sendMessage.setReplyMarkup(KeyboardFactory.hideKeyboard());
+
+        // Create inline button
+        InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
+        List<InlineKeyboardButton> rowInline = new ArrayList<>();
+
+        // Create the InlineKeyboardButton with text and callback data
+        InlineKeyboardButton button = new InlineKeyboardButton();
+        button.setText("Close the chat");
+        button.setCallbackData("UPDATE_MESSAGE_TEXT");
+
+        // Add button to the row
+        rowInline.add(button);
+        rowsInline.add(rowInline);
+
+        // Set the keyboard to the markup
+        markupInline.setKeyboard(rowsInline);
+
+        // Attach markup to the message
+        sendMessage.setReplyMarkup(markupInline);
+        // Send the message
         sender.execute(sendMessage);
-        chatStates.put(chatId, STOP_CONVERSATION);
     }
 
     public boolean userIsActive(Long chatId) {

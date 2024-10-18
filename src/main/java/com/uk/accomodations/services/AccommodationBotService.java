@@ -65,6 +65,14 @@ public class AccommodationBotService extends AbilityBot{
 
     @Override
     public void onUpdatesReceived(List<Update> updates) {
+        for (Update update : updates) {
+            // Check if the update contains a callback query
+            if (update.hasCallbackQuery()) {
+                // Process the callback query
+                responseHandler.onCallbackQueryReceived(update.getCallbackQuery());
+            }
+        }
+        // Call the superclass method to handle other types of updates
         super.onUpdatesReceived(updates);
     }
 
